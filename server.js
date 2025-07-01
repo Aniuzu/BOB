@@ -1,11 +1,13 @@
-import express from 'express';
+ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import winston from 'winston';
 import expressWinston from 'express-winston';
 import morgan from 'morgan';
 import mongoose from 'mongoose';
+import session from 'express-session';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import connectDB from './config/db.js';
@@ -27,84 +29,6 @@ connectDB();
 const app = express();
 
 // Security Headers
-app.use(helmet());
-
-// Request Logging
-app.use(morgan('dev'));
-import winston from 'winston';
-import expressWinston from 'express-winston';
-
-app.use(expressWinston.logger({
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'logs/combined.log' })
-  ],
-  format: winston.format.combine(
-    winston.format.colorize(),
-    winston.format.json()
-  ),
-  meta: true,
-  msg: "HTTP {{req.method}} {{req.url}}",
-  expressFormat: true,
-  colorize: false,
-  ignoreRoute: function (req, res) { return false; }
-}));
-
-
-app.use(express.static(path.join(__dirname, 'images')));
-
-
-// CORS Configuration
-const corsOptions = {
-  origin: process.env.NODE_ENV === 'production'
-    ? [
-        process.env.PRODUCTION_FRONTEND_URL,
-        'https://www.your-domain.com' // Add additional domains if needed
-      ]
-    : 'http://localhost:5173',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  credentials: true,
-  maxAge: 86400,
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-};
-
-app.use(cors(corsOptions));
-
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-
-app.use((req, res, next) => {
-  console.log('Incoming Request:', {
-    method: req.method,
-    url: req.url,
-    headers: req.headers,
-    body: req.body, // Now should show parsed body
-    query: req.query
-  });
-  next();
-});
-
-
-// API Routes
-app.use('/api/v1/products', productRoutes);
-app.use('/api/v1/quotes', quoteRoutes);
-app.use('/api/v1/testimonials', testimonialRoutes);
-
-app.use((req, res, next) => {
-  console.log(`Incoming ${req.method} request from ${req.headers.origin}`);
-  next();
-});
-
-// Rate Limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 200 : 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: 'Too many requests from this IP, please try again later'
-});
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -118,33 +42,112 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
+// Request Logging
+if (process.env.NODE_ENV !== 'test') {
+  app.use(morgan('dev'));
+  app.use(expressWinston.logger({
+    transports: [
+      new winston.transports.Console(),
+      new winston.transports.File({ filename: 'logs/combined.log' })
+    ],
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.json()
+    ),
+    meta: true,
+    msg: "HTTP {{req.method}} {{req.url}}",
+    expressFormat: true,
+    colorize: false,
+    ignoreRoute: (req, res) => false
+  }));
+}
+
+app.use(express.static(path.join(__dirname, 'images')));
+
+// CORS Configuration
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production'
+    ? [
+        process.env.PRODUCTION_FRONTEND_URL,
+        'https://www.your-domain.com'
+      ]
+    : 'http://localhost:5173',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  maxAge: 86400,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+
 // Body Parsing
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log('Incoming Request:', {
+    method: req.method,
+    url: req.url,
+    headers: req.headers,
+    body: req.body,
+    query: req.query
+  });
+  next();
+});
 
-// Data Sanitization (simplified to avoid errors)
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'strict',
+    domain: process.env.COOKIE_DOMAIN || undefined,
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Trust proxy in production
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 200 : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many requests from this IP, please try again later'
+});
+app.use(limiter);
+
+// Data Sanitization
+const sanitizeData = (obj) => {
+  Object.keys(obj).forEach(key => {
+    if (typeof obj[key] === 'object' && obj[key] !== null) {
+      sanitizeData(obj[key]);
+    } else if (typeof obj[key] === 'string') {
+      obj[key] = obj[key].replace(/\$/g, '').replace(/\./g, '');
+    }
+  });
+};
+
 app.use((req, res, next) => {
   if (req.body) sanitizeData(req.body);
   if (req.query) sanitizeData(req.query);
   next();
 });
 
-function sanitizeData(obj) {
-  Object.keys(obj).forEach(key => {
-    if (typeof obj[key] === 'object' && obj[key] !== null) {
-      sanitizeData(obj[key]);
-    } else if (typeof obj[key] === 'string') {
-      // Basic NoSQL injection prevention
-      obj[key] = obj[key].replace(/\$/g, '').replace(/\./g, '');
-    }
-  });
-}
-
-app.use((req, res, next) => {
-  console.log('Incoming body:', req.body);
-  console.log('Content-Type:', req.get('Content-Type'));
-  next();
-});
-
+// API Routes
+app.use('/api/v1/products', productRoutes);
+app.use('/api/v1/quotes', quoteRoutes);
+app.use('/api/v1/testimonials', testimonialRoutes);
 
 // Health Check Endpoint
 app.get('/api/v1/health', (req, res) => {
@@ -182,7 +185,7 @@ app.use((req, res) => {
 
 // Server Startup
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 

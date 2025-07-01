@@ -10,9 +10,9 @@ services:
       - key: PORT
         value: 10000
       - key: MONGODB_URI
-        value: mongodb+srv://ogwuawuri:abraham1000@cluster0.xqr23zx.mongodb.net/blocks-supplier?retryWrites=true&w=majority&appName=Cluster0
+        value: mongodb+srv://EvanTLM:TqmFu22XahfTacZR@cluster0.xqr23zx.mongodb.net/services?retryWrites=true&w=majority&appName=Cluster0
       - key: PRODUCTION_FRONTEND_URL
         value: https://pop-ten-lime.vercel.app
 
 
-# Authentication (NEWLY GENERATED SECRETS)
+# Authentication (NEWLY GENERATED SECRETS)  TqmFu22XahfTacZR
