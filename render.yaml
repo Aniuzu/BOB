@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: your-api-name
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        value: mongodb+srv://ogwuawuri:abraham1000@cluster0.xqr23zx.mongodb.net/blocks-supplier?retryWrites=true&w=majority&appName=Cluster0
+      - key: PRODUCTION_FRONTEND_URL
+        value: https://pop-ten-lime.vercel.app
+
+
+# Authentication (NEWLY GENERATED SECRETS)

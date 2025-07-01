@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import mongoSanitize from 'express-mongo-sanitize';
+import expressWinston from 'express-winston';
 import morgan from 'morgan';
 import mongoose from 'mongoose';
 import { fileURLToPath } from 'url';
@@ -31,20 +31,46 @@ app.use(helmet());
 
 // Request Logging
 app.use(morgan('dev'));
+import winston from 'winston';
+import expressWinston from 'express-winston';
+
+app.use(expressWinston.logger({
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'logs/combined.log' })
+  ],
+  format: winston.format.combine(
+    winston.format.colorize(),
+    winston.format.json()
+  ),
+  meta: true,
+  msg: "HTTP {{req.method}} {{req.url}}",
+  expressFormat: true,
+  colorize: false,
+  ignoreRoute: function (req, res) { return false; }
+}));
+
 
 app.use(express.static(path.join(__dirname, 'images')));
 
 
 // CORS Configuration
-app.use(cors({
+const corsOptions = {
   origin: process.env.NODE_ENV === 'production'
-    ? process.env.PRODUCTION_FRONTEND_URL
+    ? [
+        process.env.PRODUCTION_FRONTEND_URL,
+        'https://www.your-domain.com' // Add additional domains if needed
+      ]
     : 'http://localhost:5173',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true,
-  exposedHeaders: ['Content-Length', 'X-Request-ID']
-}));
+  maxAge: 86400,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
@@ -73,10 +99,24 @@ app.use((req, res, next) => {
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 200 : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many requests from this IP, please try again later'
 });
-app.use(limiter);
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "trusted-cdn.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", process.env.PRODUCTION_FRONTEND_URL]
+    }
+  },
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
 // Body Parsing
 
