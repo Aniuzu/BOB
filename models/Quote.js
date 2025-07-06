@@ -17,6 +17,10 @@ const quoteSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  adminNotes: {
+    type: String,
+    default: ''
+  },
   products: [{
     productId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -27,8 +31,24 @@ const quoteSchema = new mongoose.Schema({
   status: {
     type: String,
     default: 'pending',
-    enum: ['pending', 'processed', 'completed'],
+    enum: ['pending', 'processed', 'completed', 'customer_replied'],
   },
+  communications: [{
+    type: { 
+      type: String, 
+      enum: ['outbound', 'inbound', 'internal_note'],
+      required: true 
+    },
+    content: String,
+    metadata: {
+      subject: String,
+      from: String,
+      to: [String],
+      date: Date,
+      messageId: String
+    }
+  }],
+  emailThreadId: String
 }, {
   timestamps: true,
 });

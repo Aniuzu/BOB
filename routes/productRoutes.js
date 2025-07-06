@@ -4,11 +4,11 @@ import { body, param, validationResult } from 'express-validator';
 
 const router = express.Router();
 
-/**
- * @route   GET /api/v1/products
+
+ /* @route   GET /api/v1/products
  * @desc    Get all products with optional filtering
- * @access  Public
- */
+ * @access  Public */
+ 
 router.get('/', async (req, res) => {
   try {
     // Build query object
@@ -32,10 +32,9 @@ router.get('/', async (req, res) => {
       count: products.length,
       data: products
     });
-  } catch (err) {
-    console.error(err);
-    console.error("Route error:", err);
-    res.status(500).send("Server error");
+  } catch (error) {
+    console.error(error);
+    console.error("Route error:", error);
     res.status(500).json({
       success: false,
       message: 'Server error while fetching products'
@@ -84,10 +83,9 @@ router.get(
         count: products.length,
         data: products
       });
-    } catch (err) {
-      console.error(err);
-      console.error("Route error:", err);
-      res.status(500).send("Server error");
+    } catch (error) {
+      console.error(error);
+      console.error("Route error:", error);
       res.status(500).json({
         success: false,
         message: 'Server error while fetching products by category'
@@ -132,10 +130,9 @@ router.get(
         success: true,
         data: product
       });
-    } catch (err) {
-      console.error(err);
-      console.error("Route error:", err);
-      res.status(500).send("Server error");
+    } catch (error) {
+      console.error(error);
+      console.error("Route error:", error);
       res.status(500).json({
         success: false,
         message: 'Server error while fetching product'

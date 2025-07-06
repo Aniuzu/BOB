@@ -1,28 +1,24 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI, {
+    const uri = process.env.MONGO_URI;
+
+    if (!uri) {
+      console.error('❌ MONGODB_URI is not defined in .env file');
+      process.exit(1);
+    }
+
+    const conn = await mongoose.connect(uri, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000
     });
-    console.log('MongoDB Connected');
-    
-    mongoose.connection.on('error', err => {
-      console.error('MongoDB connection error:', err);
-    });
-    
-    mongoose.connection.on('disconnected', () => {
-      console.log('MongoDB disconnected. Reconnecting...');
-      setTimeout(connectDB, 5000);
-    });
-    
-  } catch (err) {
-    console.error('Initial MongoDB connection failed:', err);
+
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
     process.exit(1);
   }
 };
 
-module.exports = connectDB;
+export default connectDB;
