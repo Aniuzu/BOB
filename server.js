@@ -65,10 +65,31 @@ const connectDB = async () => {
   }
 };
 
+
 // API Routes
 app.use('/api/v1/products', productRoutes);
 app.use('/api/v1/quotes', quoteRoutes);
 app.use('/api/v1/testimonials', testimonialRoutes);
+
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Quote API Service',
+    version: '1.0.0',
+    endpoints: {
+      quotes: '/api/v1/quotes'
+    }
+  });
+});
+
+
+// Error handling
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Endpoint not found'
+  });
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {

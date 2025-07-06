@@ -7,45 +7,187 @@ import mg from 'nodemailer-mailgun-transport';
 
 const router = express.Router();
 
-// Initialize email transporter
+// ==============================================
+// EMAIL TRANSPORTER CONFIGURATION
+// ==============================================
+
 let transporter;
+let emailServiceReady = false;
 
-try {
-  const emailConfig = {
-    host: process.env.EMAIL_HOST,
-    port: parseInt(process.env.EMAIL_PORT),
-    secure: process.env.EMAIL_SECURE === 'true',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    },
-    tls: {
-      rejectUnauthorized: process.env.NODE_ENV === 'production'
-    }
-  };
-
-  if (process.env.EMAIL_SERVICE === 'Mailgun') {
-    transporter = nodemailer.createTransport(mg({
-      auth: {
-        api_key: process.env.EMAIL_API_KEY,
-        domain: process.env.MAILGUN_DOMAIN
+/**
+ * Initializes the email transporter with appropriate configuration
+ * based on environment variables.
+ */
+const initializeEmailTransporter = () => {
+  try {
+    // Configuration for Mailgun service
+    if (process.env.EMAIL_SERVICE === 'Mailgun') {
+      if (!process.env.MAILGUN_API_KEY || !process.env.MAILGUN_DOMAIN) {
+        throw new Error('Mailgun API key and domain are required');
       }
-    }));
-  } else {
-    transporter = nodemailer.createTransport(emailConfig);
-  }
 
-  // Verify connection
-  transporter.verify((error) => {
-    if (error) {
-      console.error('❌ SMTP Connection Error:', error.message);
-    } else {
-      console.log('✅ SMTP Server ready');
+      transporter = nodemailer.createTransport(mg({
+        auth: {
+          api_key: process.env.MAILGUN_API_KEY,
+          domain: process.env.MAILGUN_DOMAIN
+        },
+        host: 'api.mailgun.net'
+      }));
+    } 
+    // Configuration for standard SMTP
+    else {
+      if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+        throw new Error('SMTP host, user and password are required');
+      }
+
+      transporter = nodemailer.createTransport({
+        host: process.env.EMAIL_HOST,
+        port: parseInt(process.env.EMAIL_PORT || '587'),
+        secure: process.env.EMAIL_SECURE === 'true',
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASSWORD
+        },
+        tls: {
+          rejectUnauthorized: process.env.NODE_ENV === 'production'
+        },
+        pool: true,
+        maxConnections: 5,
+        maxMessages: 100
+      });
     }
-  });
-} catch (err) {
-  console.error('❌ Email config error:', err.message);
-}
+
+    // Verify connection
+    transporter.verify((error) => {
+      if (error) {
+        console.error('❌ Email service connection error:', error.message);
+        emailServiceReady = false;
+      } else {
+        console.log('✅ Email service ready');
+        emailServiceReady = true;
+      }
+    });
+
+    // Handle transporter errors
+    transporter.on('error', (error) => {
+      console.error('❌ Email transporter error:', error.message);
+      emailServiceReady = false;
+    });
+
+  } catch (err) {
+    console.error('❌ Email configuration error:', err.message);
+    emailServiceReady = false;
+  }
+};
+
+// Initialize on startup
+initializeEmailTransporter();
+
+// ==============================================
+// HELPER FUNCTIONS
+// ==============================================
+
+/**
+ * Sends an email with retry logic
+ * @param {Object} mailOptions - Nodemailer mail options
+ * @param {number} retries - Number of retry attempts
+ * @returns {Promise} Resolves when email is sent or all retries fail
+ */
+const sendEmailWithRetry = async (mailOptions, retries = 3) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      if (!emailServiceReady) {
+        throw new Error('Email service not ready');
+      }
+      
+      const info = await transporter.sendMail(mailOptions);
+      console.log(`Email sent successfully (attempt ${attempt})`);
+      return info;
+    } catch (error) {
+      console.error(`Email attempt ${attempt} failed:`, error.message);
+      
+      if (attempt === retries) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+    }
+  }
+};
+
+/**
+ * Generates customer confirmation email HTML
+ */
+const generateCustomerEmail = (quote) => {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #2c3e50;">Thank you for your request, ${quote.name}!</h2>
+      <p>We've received your quote request and will process it shortly.</p>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <h3 style="color: #2c3e50; margin-top: 0;">Request Details</h3>
+        <p><strong>Reference ID:</strong> ${quote._id}</p>
+        <p><strong>Project:</strong> ${quote.projectDetails}</p>
+      </div>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+        <h3 style="color: #2c3e50; margin-top: 0;">Requested Products</h3>
+        <ul style="padding-left: 20px;">
+          ${quote.products.map(p => `<li>${p.quantity} × ${p.productId}</li>`).join('')}
+        </ul>
+      </div>
+      
+      <p style="margin-top: 20px;">Our team will review your request within 24 hours.</p>
+      
+      <p style="font-size: 0.9em; color: #7f8c8d; margin-top: 30px;">
+        If you have any questions, please reply to this email.
+      </p>
+    </div>
+  `;
+};
+
+/**
+ * Generates admin notification email HTML
+ */
+const generateAdminEmail = (quote) => {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #2c3e50;">New Quote Request Received</h2>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <h3 style="color: #2c3e50; margin-top: 0;">Customer Information</h3>
+        <p><strong>Name:</strong> ${quote.name}</p>
+        <p><strong>Email:</strong> ${quote.email}</p>
+        <p><strong>Phone:</strong> ${quote.phone}</p>
+        <p><strong>Reference ID:</strong> ${quote._id}</p>
+      </div>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h3 style="color: #2c3e50; margin-top: 0;">Project Details</h3>
+        <p>${quote.projectDetails}</p>
+      </div>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+        <h3 style="color: #2c3e50; margin-top: 0;">Products Requested</h3>
+        <ul style="padding-left: 20px;">
+          ${quote.products.map(p => `<li>${p.quantity} × ${p.productId}</li>`).join('')}
+        </ul>
+      </div>
+      
+      <p style="margin-top: 20px;">
+        <a href="${process.env.ADMIN_PANEL_URL}/quotes/${quote._id}" 
+           style="background: #3498db; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px;">
+          View in Admin Panel
+        </a>
+      </p>
+    </div>
+  `;
+};
+
+// ==============================================
+// ROUTES
+// ==============================================
 
 /**
  * @route   POST /api/v1/quotes
@@ -108,53 +250,47 @@ router.post(
 
       const savedQuote = await newQuote.save();
 
-      // Email templates
-      const customerEmail = {
-        from: `"Your Company Name" <${process.env.EMAIL_FROM}>`,
-        to: email,
-        subject: `Your Quote Request #${savedQuote._id}`,
-        html: `
-          <h2>Thank you for your request, ${name}!</h2>
-          <p>We've received your quote request and will process it shortly.</p>
-          <h3>Request Details:</h3>
-          <p><strong>Reference ID:</strong> ${savedQuote._id}</p>
-          <p><strong>Project:</strong> ${projectDetails}</p>
-          <h3>Requested Products:</h3>
-          <ul>
-            ${products.map(p => `<li>${p.quantity} × ${p.productId}</li>`).join('')}
-          </ul>
-          <p>Our team will review your request within 24 hours.</p>
-        `
-      };
+      // Only attempt to send emails if transporter is configured and ready
+      if (transporter && emailServiceReady) {
+        try {
+          const customerEmail = {
+            from: `"${process.env.EMAIL_SENDER_NAME || 'Your Company'}" <${process.env.EMAIL_FROM}>`,
+            to: email,
+            subject: `Your Quote Request #${savedQuote._id}`,
+            html: generateCustomerEmail(savedQuote)
+          };
 
-      const adminEmail = {
-        from: `"Your Company Name" <${process.env.EMAIL_FROM}>`,
-        to: process.env.ADMIN_EMAIL,
-        subject: `New Quote Request: ${name}`,
-        html: `
-          <h2>New Quote Request Received</h2>
-          <p><strong>Customer:</strong> ${name}</p>
-          <p><strong>Email:</strong> ${email}</p>
-          <p><strong>Phone:</strong> ${phone}</p>
-          <p><strong>Reference ID:</strong> ${savedQuote._id}</p>
-          <h3>Project Details:</h3>
-          <p>${projectDetails}</p>
-          <h3>Products Requested:</h3>
-          <ul>
-            ${products.map(p => `<li>${p.quantity} × ${p.productId}</li>`).join('')}
-          </ul>
-        `
-      };
+          const adminEmail = {
+            from: `"${process.env.EMAIL_SENDER_NAME || 'Your Company'}" <${process.env.EMAIL_FROM}>`,
+            to: process.env.ADMIN_EMAIL,
+            subject: `New Quote Request: ${name}`,
+            html: generateAdminEmail(savedQuote)
+          };
 
-      // Send emails with error handling
-      try {
-        await transporter.sendMail(customerEmail);
-        await transporter.sendMail(adminEmail);
-        savedQuote.emailStatus = 'sent';
-        await savedQuote.save();
-      } catch (emailError) {
-        console.error('Email delivery error:', emailError);
-        savedQuote.emailStatus = 'failed';
+          // Send emails with retry logic
+          await sendEmailWithRetry(customerEmail);
+          await sendEmailWithRetry(adminEmail);
+          
+          savedQuote.emailStatus = 'sent';
+          await savedQuote.save();
+          
+        } catch (emailError) {
+          console.error('Email delivery error:', emailError);
+          savedQuote.emailStatus = 'failed';
+          savedQuote.emailError = emailError.message;
+          await savedQuote.save();
+          
+          // Still respond successfully but note email failure
+          return res.status(201).json({
+            success: true,
+            data: savedQuote,
+            message: 'Quote submitted but email notification failed',
+            warning: 'Could not send confirmation email'
+          });
+        }
+      } else {
+        console.warn('Email service not configured or ready - skipping email notifications');
+        savedQuote.emailStatus = 'skipped';
         await savedQuote.save();
       }
 
@@ -286,27 +422,36 @@ router.put(
 
       const updatedQuote = await quote.save();
 
-      // Send status update email
-      try {
-        await transporter.sendMail({
-          from: `"${process.env.EMAIL_SENDER_NAME}" <${process.env.EMAIL_FROM}>`,
-          to: updatedQuote.email,
-          subject: `Your Quote #${updatedQuote._id} Status Update`,
-          html: `
-            <h2>Quote Status Updated</h2>
-            <p>Your quote request <strong>#${updatedQuote._id}</strong> has been updated to:</p>
-            <h3>${updatedQuote.status.toUpperCase()}</h3>
-            
-            ${adminNotes ? `
-            <h4>Administrator Notes:</h4>
-            <p>${adminNotes}</p>
-            ` : ''}
-            
-            <p>If you have any questions, please contact our support team.</p>
-          `
-        });
-      } catch (emailError) {
-        console.error('Status email failed:', emailError);
+      // Send status update email if email service is ready
+      if (transporter && emailServiceReady) {
+        try {
+          await sendEmailWithRetry({
+            from: `"${process.env.EMAIL_SENDER_NAME || 'Your Company'}" <${process.env.EMAIL_FROM}>`,
+            to: updatedQuote.email,
+            subject: `Your Quote #${updatedQuote._id} Status Update`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #2c3e50;">Quote Status Updated</h2>
+                <p>Your quote request <strong>#${updatedQuote._id}</strong> has been updated to:</p>
+                <h3 style="color: ${
+                  status === 'completed' ? '#27ae60' : 
+                  status === 'cancelled' ? '#e74c3c' : '#3498db'
+                }">${status.toUpperCase()}</h3>
+                
+                ${adminNotes ? `
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <h4 style="color: #2c3e50; margin-top: 0;">Administrator Notes:</h4>
+                  <p>${adminNotes}</p>
+                </div>
+                ` : ''}
+                
+                <p>If you have any questions, please contact our support team.</p>
+              </div>
+            `
+          });
+        } catch (emailError) {
+          console.error('Status email failed:', emailError);
+        }
       }
 
       res.json({
