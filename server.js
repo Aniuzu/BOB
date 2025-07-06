@@ -22,13 +22,15 @@ const __dirname = path.dirname(__filename);
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per window
-  message: 'Too many requests from this IP, please try again later'
+  message: 'Too many requests from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false
 });
 
 const app = express();
 
-// Middleware
-app.use(cors({
+// Security and CORS configuration
+const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
     ? process.env.PRODUCTION_FRONTEND_URL 
     : process.env.DEV_FRONTEND_URL || 'http://localhost:5173',
@@ -36,21 +38,32 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true,
   maxAge: 86400 // 24 hours
-}));
+};
+
+// Middleware
+app.use(cors(corsOptions));
 app.use(helmet());
-app.use(morgan('dev'));
+app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-app.use('/images', express.static(path.join(__dirname, 'images')));
+app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
 app.use('/api/', apiLimiter);
 
-// Database connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ MongoDB connected successfully'))
-  .catch(err => {
+// Database connection with improved error handling
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000
+    });
+    console.log('✅ MongoDB connected successfully');
+  } catch (err) {
     console.error('❌ MongoDB connection error:', err.message);
     process.exit(1);
-  });
+  }
+};
 
 // API Routes
 app.use('/api/v1/products', productRoutes);
@@ -62,35 +75,41 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
+    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+    uptime: process.uptime(),
+    memoryUsage: process.memoryUsage()
   });
 });
+
+// Serve static files in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '..', 'client', 'dist')));
+  
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, '..', 'client', 'dist', 'index.html'));
+  });
+}
 
 // Error handling middleware
-app.use((req, res) => {
-  res.status(404).json({ 
-    success: false,
-    message: 'Endpoint not found' 
-  });
+app.use((req, res, next) => {
+  const error = new Error(`Not Found - ${req.originalUrl}`);
+  error.status = 404;
+  next(error);
 });
 
 app.use((err, req, res, next) => {
-  console.error('🚨 Server error:', err.stack);
-  res.status(500).json({
-    success: false,
-    message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  
   const statusCode = err.statusCode || 500;
-  const message = process.env.NODE_ENV === 'development'
-    ? err.message
-    : 'An unexpected error occurred';
-    
+  const message = err.message || 'Internal Server Error';
+  
+  if (process.env.NODE_ENV === 'development') {
+    console.error('🚨 Error:', {
+      message: err.message,
+      stack: err.stack,
+      path: req.path,
+      method: req.method
+    });
+  }
+
   res.status(statusCode).json({
     success: false,
     message,
@@ -98,15 +117,53 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
+// Start server with proper shutdown handling
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+let server;
+
+const startServer = async () => {
+  try {
+    await connectDB();
+    
+    server = app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🔄 CORS allowed origin: ${corsOptions.origin}`);
+    });
+  } catch (error) {
+    console.error('❌ Server startup failed:', error.message);
+    process.exit(1);
+  }
+};
+
+// Graceful shutdown
+const shutdown = (signal) => {
+  console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`);
+  
+  server?.close(() => {
+    console.log('🔴 Server closed');
+    mongoose.connection.close(false, () => {
+      console.log('🔴 MongoDB connection closed');
+      process.exit(0);
+    });
+  });
+};
+
+// Handle termination signals
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
   console.error('⚠️ Unhandled Rejection:', err.message);
-  server.close(() => process.exit(1));
+  shutdown('unhandledRejection');
 });
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('💥 Uncaught Exception:', err.message);
+  shutdown('uncaughtException');
+});
+
+// Start the application
+startServer();
